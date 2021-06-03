@@ -1,0 +1,3 @@
+[submodule "ghostwheel"]
+	path = ghostwheel
+	url = git@github.com:whmountains/ghostwheel.git
