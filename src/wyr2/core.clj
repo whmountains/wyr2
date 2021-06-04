@@ -16,32 +16,35 @@
   (s/and string?
          #(not= % "")))
 
-(s/def ::section-field (s/tuple string? string?))
-(s/def ::section-fields (s/coll-of ::section-field))
-
-(s/def ::ip-prefix s-not-empty-string)
-
-(s/def ::name keyword?)
-(s/def ::net-id (s/int-in 1 255))
-(s/def ::client-id (s/int-in 100 201))
-(s/def ::iface-name s-not-empty-string)
-(s/def ::local-name keyword?)
-(s/def ::nat-interfaces (s/coll-of ::iface-name))
-(s/def ::pubkey string?)
 (s/def ::allowed-ips (s/coll-of s-not-empty-string))
-(s/def ::public-ip s-not-empty-string)
-(s/def ::endpoint s-not-empty-string)
-(s/def ::listen-port int?)
+(s/def ::client-id (s/int-in 100 201))
 (s/def ::connect-to (s/coll-of keyword? :min-count 1))
 (s/def ::connect-to keyword?)
-(s/def ::section-title s-not-empty-string)
+(s/def ::endpoint s-not-empty-string)
+(s/def ::iface-name s-not-empty-string)
+(s/def ::ip-prefix s-not-empty-string)
+(s/def ::listen-port int?)
+(s/def ::local-name keyword?)
+(s/def ::name keyword?)
+(s/def ::nat-interface (s/keys :req-un [::iface-name ::subnet]))
+(s/def ::nat-interfaces (s/coll-of ::nat-interface))
+(s/def ::net-id (s/int-in 1 255))
+(s/def ::pubkey s-not-empty-string)
+(s/def ::public-ip s-not-empty-string)
 (s/def ::section-comment s-not-empty-string)
+(s/def ::section-field (s/tuple string? string?))
+(s/def ::section-fields (s/coll-of ::section-field))
+(s/def ::section-title s-not-empty-string)
+(s/def ::subnet s-not-empty-string)
 
 (defn interface-gen
   [server-names]
-  (gen/hash-map :connect-to (gen/elements server-names)))
+  (gen/one-of [(gen/hash-map :connect-to (gen/elements server-names))
+               (gen/hash-map :connect-to (gen/elements server-names)
+                             :nat-interfaces (s/gen ::nat-interfaces))]))
 
-(s/def ::interface (s/keys :req-un [::connect-to]))
+(s/def ::interface (s/keys :req-un [::connect-to]
+                           :opt-un [::nat-interfaces]))
 (s/def ::interfaces (s/map-of string? ::interface :min-count 1))
 
 (defn client-gen
@@ -55,7 +58,8 @@
 (s/def ::client (s/keys :req-un [::client-id ::pubkey ::interfaces]))
 (s/def ::clients (s/map-of keyword? ::client :min-count 1))
 
-(s/def ::server (s/keys :req-un [::public-ip ::pubkey ::net-id ::iface-name]))
+(s/def ::server (s/keys :req-un [::public-ip ::pubkey ::net-id ::iface-name]
+                        :req-opt [::nat-interfaces]))
 (s/def ::servers (s/map-of keyword? ::server :min-count 1))
 
 (s/def ::section (s/keys :req-un [::section-title ::section-comment ::section-fields]))
@@ -168,17 +172,59 @@
             (map render-section)
             (str/join "\n")))
 
-;; (>defn nat-rule
-;;        [from to]
-;;        [string? string? => ::kv-col]
-;;        (let [args {:from from :to to}]
-;;          [["PostUp"
-;;            (dj/render "iptables -A FORWARD -i {{from}} -j ACCEPT; iptables -A FORWARD -o {{from}} -j ACCEPT; iptables -t nat -A POSTROUTING -o {{to}} -j MASQUERADE"
-;;                       args)]
-;;           ["PostDown"
-;;            (dj/render "iptables -D FORWARD -i {{from}} -j ACCEPT; iptables -D FORWARD -o {{from}} -j ACCEPT; iptables -t nat -D POSTROUTING -o {{to}} -j MASQUERADE"
-;;                       args)]]))
-;; #_(nat-rule "wg0" "eth0")
+(>defn nat-rule
+       [from to]
+       [string? string? => ::section-fields]
+       (let [args {:from from :to to}]
+         [["PostUp"
+           (dj/render "iptables -A FORWARD -i {{from}} -j ACCEPT; iptables -A FORWARD -o {{from}} -j ACCEPT; iptables -t nat -A POSTROUTING -o {{to}} -j MASQUERADE"
+                      args)]
+          ["PostDown"
+           (dj/render "iptables -D FORWARD -i {{from}} -j ACCEPT; iptables -D FORWARD -o {{from}} -j ACCEPT; iptables -t nat -D POSTROUTING -o {{to}} -j MASQUERADE"
+                      args)]]))
+#_(nat-rule "wg0" "eth0")
+
+(>defn client-connects-to
+       [server-name client-config]
+       [keyword? ::client
+        => boolean?]
+       (->> client-config
+            :interfaces
+            (some #(-> % val :connect-to (= server-name)))
+            boolean))
+
+
+(defn client->server-allowed-ips-args
+  []
+  (-> (netmap-gen)
+      (gen/bind (fn [nmap] (gen/tuple
+                            (s/gen ::ip-prefix)
+                            (s/gen ::net-id)
+                            (gen/elements (keys (:servers nmap)))
+                            (gen/return nmap))))))
+
+(>defn client->server-allowed-ips
+       [ip-prefix net-id server-name config]
+       [::ip-prefix ::net-id keyword? ::netmap
+        << client->server-allowed-ips-args
+        => string?]
+       (let [nat-interfaces (get-in config [:servers server-name :nat-interfaces])
+
+             natural-subnet (format "%s.%s.0/24" ip-prefix net-id)
+             server-subnets (->> nat-interfaces
+                                 (map :subnet))
+             client-subnets (->> (:clients config)
+                                 (assoc-key :client-name)
+                                 (filter #(client-connects-to server-name %))
+                                 (mapcat :interfaces)
+                                 vals
+                                 (mapcat :nat-interfaces)
+                                 (map :subnet))
+
+             all-subnets (concat [natural-subnet]
+                                 server-subnets
+                                 client-subnets)]
+         (str/join ", " all-subnets)))
 
 (defn client-config-args
   []
@@ -189,7 +235,6 @@
                                           (gen/return client-name)
                                           (gen/elements (keys (get-in nmap [:clients client-name :interfaces])))
                                           (gen/return nmap))))))
-
 
 (>defn client-config
        [client-name iface-name config]
@@ -202,10 +247,10 @@
 
              client-config (get-in config [:clients client-name])
              client-id (:client-id client-config)
-       ;;       persistent-keepalive (:persistent-keepalive client-config)
 
              iface-config (get-in client-config [:interfaces iface-name])
              server-name (:connect-to iface-config)
+             local-nat-interfaces (:nat-interfaces iface-config)
 
              server-config (get-in config [:servers server-name])
              net-id (:net-id server-config)
@@ -216,15 +261,25 @@
              [{:section-title "Interface"
                :section-comment (format "Client: %s %s" client-name iface-name)
                :section-fields
-               [["Address" (format "%s.%s.%s/24" ip-prefix net-id client-id)]
-                ["PrivateKey" "__PRIVKEY__"]]}
+               (concat
+                [["Address" (format "%s.%s.%s/24" ip-prefix net-id client-id)]
+                 ["PrivateKey" "__PRIVKEY__"]]
+                (when local-nat-interfaces
+                  (mapcat nat-rule
+                          (repeat iface-name)
+                          (map :iface-name local-nat-interfaces))))}
               {:section-title "Peer"
                :section-comment (format "%s server" server-name)
                :section-fields
                [["PublicKey" server-pubkey]
                 ["Endpoint" (str server-ip ":51820")]
-                ["AllowedIps" (format "%s.%s.0/24" ip-prefix net-id)]
-                ["PersistentKeepalive" "25"]]}]]
+                ["PersistentKeepalive" "25"]
+                ["AllowedIps"
+                 (client->server-allowed-ips
+                  ip-prefix
+                  net-id
+                  server-name
+                  config)]]}]]
 
          (render-sections output)))
 #_(->> "var/netmap.edn"
@@ -239,14 +294,16 @@
       (gen/bind (fn [nmap] (gen/tuple (gen/elements (keys (:servers nmap)))
                                       (gen/return nmap))))))
 
-(>defn client-connects-to
-       [server-name client-config]
-       [keyword? ::client
-        => boolean?]
-       (->> client-config
-            :interfaces
-            (some #(-> % val :connect-to (= server-name)))
-            boolean))
+(>defn server->client-allowed-ips
+       [ip-prefix net-id client-id interfaces]
+       [::ip-prefix ::net-id ::client-id ::interfaces => string?]
+       (let [natural-subnet (format "%s.%s.%s/32" ip-prefix net-id client-id)
+             extra-subnets (->> interfaces
+                                vals
+                                (mapcat :nat-interfaces)
+                                (map :subnet))
+             all-subnets (cons natural-subnet extra-subnets)]
+         (str/join ", " all-subnets)))
 
 (>defn server-config
        [server-name config]
@@ -258,25 +315,32 @@
              server-config (get-in config [:servers server-name])
              iface-name (:iface-name server-config)
              net-id (:net-id server-config)
-             server-pubkey (:pubkey server-config)
-             server-ip (:public-ip server-config)
+             nat-interfaces (:nat-interfaces server-config)
 
              interface [{:section-title "Interface"
                          :section-comment (format "name = %s, iface = %s, role = server" server-name iface-name)
                          :section-fields
-                         [["Address" (format "%s.%s.1/24" ip-prefix net-id)]
-                          ["PrivateKey" "__PRIVKEY__"]]}]
+                         (concat
+                          [["Address" (format "%s.%s.1/24" ip-prefix net-id)]
+                           ["PrivateKey" "__PRIVKEY__"]
+                           ["ListenPort" "51820"]]
+                          (when nat-interfaces
+                            (mapcat nat-rule (repeat iface-name) (map :iface-name nat-interfaces))))}]
 
              clients (->> (:clients config)
                           (assoc-key :client-name)
                           (filter #(client-connects-to server-name %))
-                          (map (fn [{:keys [pubkey client-id client-name]}]
+                          (map (fn [{:keys [pubkey client-name client-id interfaces]}]
                                  {:section-title "Peer"
                                   :section-comment (str client-name)
                                   :section-fields
                                   [["PublicKey" pubkey]
                                    ["AllowedIps"
-                                    (format "%s.%s.%s/32" ip-prefix net-id client-id)]]})))
+                                    (server->client-allowed-ips
+                                     ip-prefix
+                                     net-id
+                                     client-id
+                                     interfaces)]]})))
 
              output (concat interface clients)]
 

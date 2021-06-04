@@ -1,3 +1,4 @@
+rm /etc/wireguard/{{ifname}}-bu.conf
 mv /etc/wireguard/{{ifname}}.conf /etc/wireguard/{{ifname}}-bu.conf
 touch /etc/wireguard/{{ifname}}.conf
 chmod 066 /etc/wireguard/{{ifname}}.conf
