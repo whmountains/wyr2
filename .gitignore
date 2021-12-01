@@ -13,5 +13,5 @@ pom.xml.asc
 .calva
 **/.clj-kondo/.cache/
 .lsp
-var/
+var
 .DS_Store
