@@ -4,7 +4,11 @@
 (def profiles
   {:tri
    {:netmap "var/tri/netmap.edn"
-    :output "var/tri/out"}})
+    :output "var/tri/out"}
+
+   :whiting
+   {:netmap "var/whiting/netmap.edn"
+    :output "var/whiting/out"}})
 
 (defn get-netmap-path
   [profile]
