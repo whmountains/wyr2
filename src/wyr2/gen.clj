@@ -6,7 +6,8 @@
    [selmer.util]
    [clojure.string :as str]
    [expound.alpha :refer [expound]]
-   [clojure.spec.gen.alpha :as gen]))
+   [clojure.spec.gen.alpha :as gen]
+   [clojure.set :as cset]))
 
 (selmer.util/turn-off-escaping!)
 
@@ -91,6 +92,7 @@
 ;;   (into {} (filter #(f (val %)) m)))
 
 (defn assoc-key
+  "Converts {:a {:val 1} :b {:val 2}} to [{:name :a :val 1} {:name :b :val 2}]"
   [new-key m]
   #_[any? (s/map-of any? (s/map-of any? any?))
      => (s/coll-of any?)]
@@ -201,38 +203,73 @@
                             (gen/elements (keys (:servers nmap)))
                             (gen/return nmap))))))
 
+(defn client-nat-subnets
+  "return the set of subnets the client connects to"
+  [client]
+  (->> client
+       (:interfaces)
+       (vals)
+       (mapcat :nat-interfaces)
+       (map :subnet)
+       (into #{})))
+
+(defn client-local-subnets
+  "return the set of subnets the client connects to"
+  [client]
+  (->> client
+       (:interfaces)
+       (vals)
+       (mapcat :local-subnets)
+       (into #{})))
+
 (defn client->server-allowed-ips
-  [ip-prefix net-id server-name config]
+  [ip-prefix net-id server-name client-name config]
   #_[::ip-prefix ::net-id keyword? ::netmap
      :gen client->server-allowed-ips-args
      :ret string?]
-  (let [nat-interfaces (get-in config [:servers server-name :nat-interfaces])
+  (let [server-nat-interfaces (get-in config [:servers server-name :nat-interfaces])
+        client-config (get-in config [:clients client-name])
 
+        ;; local subnets, which should not be routed through the server
+        local-subnets (into #{} (concat
+                                 (client-nat-subnets client-config)
+                                 (client-local-subnets client-config)))
+
+        ;; the natural subnet of the network
         natural-subnet (format "%s.%s.0/24" ip-prefix net-id)
-        server-subnets (->> nat-interfaces
-                            (map :subnet))
+
+        ;; the subnets the server provides routes for
+        server-subnets (->> server-nat-interfaces
+                            (map :subnet)
+                            (into #{}))
+
+        ;; subnets from other clients
         client-subnets (->> (:clients config)
+                            ;; move map key to :client-name field
                             (assoc-key :client-name)
+                            ;; only look at clients which connect to the current server
                             (filter #(client-connects-to server-name %))
-                            (mapcat :interfaces)
-                            vals
-                            (mapcat :nat-interfaces)
-                            (map :subnet))
+                            ;; get subnets
+                            (mapcat client-nat-subnets)
+                            ;; make into set
+                            (into #{}))
 
-        all-subnets (concat [natural-subnet]
-                            server-subnets
-                            client-subnets)]
-    (str/join ", " all-subnets)))
+        all-subnets (cset/union #{natural-subnet}
+                                server-subnets
+                                client-subnets)
 
-(defn client-config-args
-  []
-  (-> (netmap-gen)
-      (gen/bind (fn [nmap] (gen/tuple (gen/elements (keys (:clients nmap)))
-                                      (gen/return nmap))))
-      (gen/bind (fn [[client-name nmap]] (gen/tuple
-                                          (gen/return client-name)
-                                          (gen/elements (keys (get-in nmap [:clients client-name :interfaces])))
-                                          (gen/return nmap))))))
+        final-subnets (cset/difference all-subnets local-subnets)]
+    (str/join ", " final-subnets)))
+
+;; (defn client-config-args
+;;   []
+;;   (-> (netmap-gen)
+;;       (gen/bind (fn [nmap] (gen/tuple (gen/elements (keys (:clients nmap)))
+;;                                       (gen/return nmap))))
+;;       (gen/bind (fn [[client-name nmap]] (gen/tuple
+;;                                           (gen/return client-name)
+;;                                           (gen/elements (keys (get-in nmap [:clients client-name :interfaces])))
+;;                                           (gen/return nmap))))))
 
 (defn client-config
   [client-name iface-name config]
@@ -277,6 +314,7 @@
              ip-prefix
              net-id
              server-name
+             client-name
              config)]]}]]
 
     (render-sections output)))
