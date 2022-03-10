@@ -6,6 +6,10 @@
    {:netmap "var/tri/netmap.edn"
     :output "var/tri/out"}
 
+   :wgcl
+   {:netmap "var/wgcl/netmap.edn"
+    :output "var/wgcl/out"}
+
    :whiting
    {:netmap "var/whiting/netmap.edn"
     :output "var/whiting/out"}})

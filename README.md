@@ -16,3 +16,17 @@ wg pubkey < /etc/wireguard/privkey
 ```
 
 Now add the public key to netmap.
+
+## Logging
+
+enable:
+echo 'module wireguard +p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+
+view:
+journalctl -xef
+
+disable:
+echo 'module wireguard -p' | sudo tee /sys/kernel/debug/dynamic_debug/control
+
+source:
+https://www.the-digital-life.com/wireguard-enable-logging/
