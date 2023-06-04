@@ -282,6 +282,7 @@
 
         client-config (get-in config [:clients client-name])
         client-id (:client-id client-config)
+        mtu (:mtu client-config)
 
         iface-config (get-in client-config [:interfaces iface-name])
         server-name (:connect-to iface-config)
@@ -299,6 +300,8 @@
           (concat
            [["Address" (format "%s.%s.%s/24" ip-prefix net-id client-id)]
             ["PrivateKey" "__PRIVKEY__"]]
+           (when mtu
+             [["MTU" (str mtu)]])
            (when local-nat-interfaces
              (mapcat nat-rule
                      (repeat iface-name)
@@ -323,13 +326,6 @@
        (client-config :ho1 "wg0")
        (spit "var/ho1-wg0.conf"))
 
-
-(defn server-config-args
-  []
-  (-> (netmap-gen)
-      (gen/bind (fn [nmap] (gen/tuple (gen/elements (keys (:servers nmap)))
-                                      (gen/return nmap))))))
-
 (defn server->client-allowed-ips
   [ip-prefix net-id client-id interfaces]
   #_[::ip-prefix ::net-id ::client-id ::interfaces => string?]
@@ -349,9 +345,7 @@
   (let [ip-prefix (:ip-prefix config)
 
         server-config (get-in config [:servers server-name])
-        iface-name (:iface-name server-config)
-        net-id (:net-id server-config)
-        nat-interfaces (:nat-interfaces server-config)
+        {:keys [iface-name net-id nat-interfaces route-table]} server-config
 
         interface [{:section-title "Interface"
                     :section-comment (format "name = %s, iface = %s, role = server" server-name iface-name)
@@ -359,7 +353,8 @@
                     (concat
                      [["Address" (format "%s.%s.1/24" ip-prefix net-id)]
                       ["PrivateKey" "__PRIVKEY__"]
-                      ["ListenPort" "51820"]]
+                      ["ListenPort" "51820"]
+                      ["Table" (or route-table "auto")]]
                      (when nat-interfaces
                        (mapcat nat-rule (repeat iface-name) (map :iface-name nat-interfaces))))}]
 

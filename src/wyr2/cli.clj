@@ -12,7 +12,11 @@
 
    :whiting
    {:netmap "var/whiting/netmap.edn"
-    :output "var/whiting/out"}})
+    :output "var/whiting/out"}
+
+   :wyng
+   {:netmap "var/wyng/netmap.edn"
+    :output "var/wyng/out"}})
 
 (defn get-netmap-path
   [profile]
@@ -42,12 +46,14 @@
   ([profile client-name]
    (let [config (load-config profile)
          interfaces (get-in config [:clients client-name :interfaces])]
-     (doseq [iface-name (keys interfaces)]
+     (doseq [[iface-name {:keys [connect-to] :as iface}] interfaces]
        (printf "Generating client config for %s %s\n" client-name iface-name)
-       (gen-client profile client-name iface-name config))))
+       (gen-client profile client-name iface-name connect-to config))))
   ([profile client-name iface-name]
-   (gen-client profile client-name iface-name (load-config profile)))
-  ([profile client-name iface-name config]
+   (gen-client profile client-name iface-name nil (load-config profile)))
+  ([profile client-name iface-name server-name config]
+   (when server-name
+     (gen-server profile server-name))
    (let [config-str (core/client-config client-name iface-name config)
          update-cmd (core/linux-update-command iface-name config-str)
          output-path (get-output-path profile)]

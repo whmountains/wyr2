@@ -9,7 +9,7 @@
 wg genkey > /etc/wireguard/privkey
 
 # Change permissions on the file
-chmod 066 /etc/wireguard/privkey
+chmod 600 /etc/wireguard/privkey
 
 # Display the public key
 wg pubkey < /etc/wireguard/privkey
